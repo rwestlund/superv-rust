@@ -1,0 +1,7 @@
+[package]
+name = "superv"
+version = "0.0.1"
+authors = [ "Randy Westlund <rwestlun@gmail.com>" ]
+
+[dependencies]
+toml = "0.2.0"
