@@ -1,25 +1,33 @@
 extern crate toml;
 
 //use std::env;
-use std::str;
-use std::process::Command;
-use std::io::prelude::*;
+// For reading the config file.
 use std::fs::File;
-use std::thread;
+// For File traits.
+use std::io::prelude::*;
+// For process management.
+use std::process;
+// For sharing a Process between threads.
 use std::sync::Arc;
+// For running multiple threads.
+use std::thread;
+// For sleeping.
+use std::time;
 
 // This describes a process that we're responsible for running. We'll allocate
 // one for each one them.
 #[derive(Debug)]
 struct Process {
     // A user-defined name of the process.
-    name: String,
+    name:           String,
     // The path to the executable, e.g. /bin/ls.
-    path: String,
+    path:           String,
     // A list of arguments to pass, e.g. [ "-a", "-l" ] or [].
-    args: Vec<String>,
+    args:           Vec<String>,
     // The time to sleep between restarts, in milliseconds. Defaults to 0.
-    restart_delay: u64,
+    restart_delay:  u64,
+    // The current working directory of the process.
+    cwd:            Option<String>,
 }
 
 fn main () {
@@ -37,7 +45,7 @@ fn main () {
         // Launch the program.
         run(p.clone());
     }
-    thread::sleep(std::time::Duration::from_millis(10000));
+    thread::sleep(time::Duration::from_millis(10000));
 }
 
 // Keep the given process running. This should be run in a separate thread.
@@ -47,17 +55,22 @@ fn run (p: Arc<Process>) {
             let mut child = launch(&*p);
             let status = child.wait().expect("Child wasn't running!");
             println!("child {} exited with status {}", p.name, status);
-            thread::sleep(std::time::Duration::from_millis(p.restart_delay));
+            thread::sleep(time::Duration::from_millis(p.restart_delay));
         }
     });
 }
 
 // Launch a program, given the Process struct, then return the Child.
-fn launch(p: &Process) -> std::process::Child {
+fn launch(p: &Process) -> process::Child {
     println!("starting process {}", p.name);
-    Command::new(&p.path)
-        .args(&p.args)
-        .spawn()
+    let mut cmd = process::Command::new(&p.path);
+    cmd.args(&p.args);
+    cmd.stdin(process::Stdio::null());
+
+    if (p.cwd).is_some() {
+        cmd.current_dir(p.cwd.as_ref().unwrap());
+    }
+    cmd.spawn()
         .expect("failed to run binary")
 }
 
@@ -92,6 +105,9 @@ fn parse_config_file(filename: &str, processes: &mut Vec<Arc<Process>>) {
             .unwrap()
             .as_str()
             .unwrap();
+        let cwd = def.get("cwd")
+            .and_then(|x| x.as_str())
+            .and_then(|x| Some(x.to_string()));
         let restart_delay = def.get("restart_delay")
             .and_then(|x| x.as_integer())
             .unwrap_or(0);
@@ -111,6 +127,7 @@ fn parse_config_file(filename: &str, processes: &mut Vec<Arc<Process>>) {
             path:           path.to_string(),
             args:           args,
             restart_delay:  restart_delay as u64,
+            cwd:            cwd,
         }));
     }
 }
