@@ -1,10 +1,21 @@
+// Copyright (c) 2016, Randy Westlund. All rights reserved.
+// This code is under the BSD-2-Clause license.
+
+// Superv is a process supervisor written in Rust. See README.md for details.
+
 extern crate toml;
 
 //use std::env;
 // For reading the config file.
 use std::fs::File;
+// For appending to log files.
+use std::fs::OpenOptions;
 // For File traits.
-use std::io::prelude::*;
+//use std::io::prelude::*;
+// The trait for File.as_raw_fd().
+use std::os::unix::io::AsRawFd;
+// The trait for process::Stdio.from_raw_fd().
+use std::os::unix::io::FromRawFd;
 // For process management.
 use std::process;
 // For sharing a Process between threads.
@@ -13,6 +24,7 @@ use std::sync::Arc;
 use std::thread;
 // For sleeping.
 use std::time;
+use std::io::Read;
 
 // This describes a process that we're responsible for running. We'll allocate
 // one for each one them.
@@ -28,6 +40,9 @@ struct Process {
     restart_delay:  u64,
     // The current working directory of the process.
     cwd:            Option<String>,
+    // Filenames for where to send stdout and stderr. Defaults to /dev/null.
+    stdout:         String,
+    stderr:         String,
 }
 
 fn main () {
@@ -50,14 +65,35 @@ fn main () {
 
 // Keep the given process running. This should be run in a separate thread.
 fn run (p: Arc<Process>) {
-    thread::spawn(move || {
-        loop {
-            let mut child = launch(&*p);
-            let status = child.wait().expect("Child wasn't running!");
-            println!("child {} exited with status {}", p.name, status);
-            thread::sleep(time::Duration::from_millis(p.restart_delay));
-        }
-    });
+    thread::Builder::new()
+        .name(p.name.clone())
+        .spawn(move || {
+
+            //TODO I can't get io redirection to work.
+            // Open in append mode.
+            //let mut stdout = OpenOptions::new()
+                //.create(true)
+                //.write(true)
+                //.append(true)
+                //.open(&p.stdout)
+                //.expect(&*format!("Failed to open output file {}.", &p.stdout));
+
+            loop {
+                let mut child = launch(&*p);
+                //TODO I can't get io redirection to work.
+                //match child.stdout {
+                    //Some(x) => std::io::copy(&mut x, &mut std::io::stdout()),
+                    //None => Ok(0u64),
+                //}
+                //std::io::copy(&mut child.stdout.unwrap(), &mut std::io::stdout());
+                //if p.stdout != "/dev/null" {
+                    //std::io::copy(&mut child.stdout.unwrap(), &mut std::io::stdout());
+                //}
+                let status = child.wait().expect("Child wasn't running!");
+                println!("child {} exited with status {}", p.name, status);
+                thread::sleep(time::Duration::from_millis(p.restart_delay));
+            }
+        }).expect("Failed to spawn thread");
 }
 
 // Launch a program, given the Process struct, then return the Child.
@@ -70,6 +106,25 @@ fn launch(p: &Process) -> process::Child {
     if (p.cwd).is_some() {
         cmd.current_dir(p.cwd.as_ref().unwrap());
     }
+
+    // Open output files.
+    if p.stdout == "/dev/null" {
+        cmd.stdout(process::Stdio::null());
+    }
+    else {
+        cmd.stdout(process::Stdio::piped());
+        //TODO I can't get io redirection to work.
+        //println!("Sending {} stdout to {}", &p.name, &p.stdout);
+        // Open in append mode.
+        //let mut stdout = OpenOptions::new()
+            //.create(true)
+            //.write(true)
+            //.append(true)
+            //.open(&p.stdout)
+            //.expect(&*format!("Failed to open output file {}.", &p.stdout));
+        //cmdstdout(unsafe { process::Stdio::from_raw_fd(stdout.as_raw_fd()) });
+    }
+
     cmd.spawn()
         .expect("failed to run binary")
 }
@@ -111,6 +166,14 @@ fn parse_config_file(filename: &str, processes: &mut Vec<Arc<Process>>) {
         let restart_delay = def.get("restart_delay")
             .and_then(|x| x.as_integer())
             .unwrap_or(0);
+        let stdout = def.get("stdout")
+            .and_then(|x| x.as_str())
+            .and_then(|x| Some(x.to_string()))
+            .unwrap_or("/dev/null".to_string());
+        let stderr = def.get("stderr")
+            .and_then(|x| x.as_str())
+            .and_then(|x| Some(x.to_string()))
+            .unwrap_or("/dev/null".to_string());
         // Getting arguments is more complicated, both because it's optional,
         // and because it needs to be split to prevent the whole string from
         // being delivered as one argument.
@@ -128,6 +191,8 @@ fn parse_config_file(filename: &str, processes: &mut Vec<Arc<Process>>) {
             args:           args,
             restart_delay:  restart_delay as u64,
             cwd:            cwd,
+            stdout:         stdout,
+            stderr:         stderr,
         }));
     }
 }
